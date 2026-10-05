@@ -23,7 +23,9 @@ This fork is read-only: only the tools in degram_readonly.ALLOWED_TOOLS exist.
 """
 
 import argparse
+import asyncio
 import base64
+import json
 import os
 import sys
 from typing import Any, Dict, Optional, Union
@@ -129,7 +131,117 @@ class RevitClient(object):
         return Image(data=base64.b64decode(encoded), format="png")
 
 
-revit = RevitClient()
+class DegramClient(RevitClient):
+    """Fail-closed, serialized client that returns structured outcomes (phase 1301).
+
+    * every call runs under one asyncio lock; waiting for it longer than
+      ``lock_timeout`` (30 s) is BUSY;
+    * before each read it refuses with SETUP_INCOMPLETE when REVIT_HOST, the
+      configured pyRevit Routes host, or a live probe of this machine's
+      non-loopback addresses says port 48884 is not loopback-only (D-23);
+    * failures are ``{"status": "error", "code": ..., "error": ...}`` objects,
+      never free-text ``Error:`` strings; there is no automatic retry.
+    """
+
+    def __init__(self, root: str = API_ROOT, host: str = REVIT_HOST, port: int = REVIT_PORT):
+        super().__init__(root)
+        self.host = host
+        self.port = port
+        self.lock_timeout = DEFAULT_TIMEOUT
+        self._lock: Optional[asyncio.Lock] = None
+        self._lock_loop = None
+
+    def _the_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not loop:
+            self._lock, self._lock_loop = asyncio.Lock(), loop
+        return self._lock
+
+    async def setup_problem(self) -> Optional[Payload]:
+        """None when reads may proceed, else the refusal outcome."""
+        out = degram_readonly.error_outcome
+        if not degram_readonly.is_loopback_host(self.host):
+            return out("SETUP_INCOMPLETE", "REVIT_HOST must be a loopback address; refusing to read",
+                       reason="REVIT_HOST_NOT_LOOPBACK", host=self.host)
+        configured = degram_readonly.read_routes_config().get("host")
+        if configured is not None and not degram_readonly.is_loopback_host(configured):
+            return out("SETUP_INCOMPLETE",
+                       "pyRevit Routes host is not loopback; set host = 127.0.0.1 and restart Revit",
+                       reason="ROUTES_NOT_LOOPBACK", host=configured)
+        answering = await asyncio.to_thread(degram_readonly.probe_non_loopback, self.port)
+        if answering:
+            return out("SETUP_INCOMPLETE",
+                       "pyRevit Routes answers on a non-loopback address; set host = 127.0.0.1 and restart Revit",
+                       reason="ROUTES_NOT_LOOPBACK", address=answering, port=self.port)
+        return None
+
+    def _outcome(self, path: str, response: httpx.Response) -> Union[Payload, list]:
+        out = degram_readonly.error_outcome
+        status = response.status_code
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if degram_readonly.is_outcome(body):
+            return body  # a route already answered with a structured outcome
+        if status in (406, 408):
+            return out("BUSY", "Revit refused or timed out the request (a dialog may be open)",
+                       path=path, httpStatus=status)
+        if status == 404 and not (isinstance(body, dict) and "error" in body):
+            return out("EXTENSION_NOT_LOADED",
+                       "Revit does not provide this route; the revit-mcp pyRevit extension is not loaded "
+                       "or is a different version", path=path)
+        if status == 503 and isinstance(body, dict) and "No active Revit document" in str(body.get("error")):
+            return out("SETUP_INCOMPLETE", "No Revit project document is open",
+                       reason="NO_DOCUMENT_OPEN", path=path)
+        if status >= 400 or not isinstance(body, (dict, list)):
+            message = None
+            if isinstance(body, dict):
+                message = body.get("error") or (body.get("exception") or {}).get("message")
+            message = message or response.text[:300] or "HTTP {}".format(status)
+            return out("ROUTE_ERROR", str(message), path=path, httpStatus=status)
+        return body
+
+    async def _call(self, method: str, path: str, timeout: float, **kwargs):
+        out = degram_readonly.error_outcome
+        lock = self._the_lock()
+        try:
+            await asyncio.wait_for(lock.acquire(), self.lock_timeout)
+        except asyncio.TimeoutError:
+            return out("BUSY", "Another Revit read is still in progress", path=path)
+        try:
+            problem = await self.setup_problem()
+            if problem is not None:
+                return problem
+            try:
+                response = await self._session().request(method, path, timeout=timeout, **kwargs)
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if degram_readonly.read_routes_config().get("enabled") is False:
+                    return out("ROUTES_DISABLED", "pyRevit Routes are disabled in the pyRevit settings",
+                               path=path)
+                return out("BRIDGE_OFF", "Cannot reach Revit at {}".format(self.root), path=path)
+            except httpx.TimeoutException:
+                return out("BUSY", "Revit did not answer within {:.0f}s".format(timeout), path=path)
+            except httpx.HTTPError as exc:
+                return out("ROUTE_ERROR", "request failed: {}".format(exc), path=path)
+            return self._outcome(path, response)
+        finally:
+            lock.release()
+
+    async def get(self, path: str, ctx=None, timeout: float = DEFAULT_TIMEOUT,
+                  params: Optional[Payload] = None):
+        return await self._call("GET", path, timeout, params=params)
+
+    async def post(self, path: str, data: Optional[Payload] = None, ctx=None,
+                   timeout: float = DEFAULT_TIMEOUT):
+        return await self._call("POST", path, timeout, json=data or {})
+
+    async def image(self, path: str, ctx=None):
+        return json.dumps(degram_readonly.error_outcome(
+            "ROUTE_ERROR", "images are not available in read-only DeGram mode", path=path))
+
+
+revit = DegramClient()
 mcp = FastMCP(
     "Revit MCP Server",
     host=MCP_HOST,
@@ -178,6 +290,12 @@ if __name__ == "__main__":
     except degram_readonly.DegramModeError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(2)
+    if degram_readonly.degram_mode():
+        # stdout is the MCP channel; report on stderr. Reads re-check before every call.
+        answering = degram_readonly.probe_non_loopback(REVIT_PORT)
+        if answering:
+            print("SETUP_INCOMPLETE ROUTES_NOT_LOOPBACK: port {} answers on {}; reads are refused".format(
+                REVIT_PORT, answering), file=sys.stderr)
     if transport == "combined":
         import anyio
 

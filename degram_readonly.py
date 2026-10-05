@@ -59,12 +59,13 @@ ALLOWED_ROUTE_MODULES = (
 )
 
 #: Structured outcome codes returned by the MCP half and the document routes.
+#: SETUP_INCOMPLETE carries a ``reason``: ROUTES_NOT_LOOPBACK (D-23),
+#: REVIT_HOST_NOT_LOOPBACK or NO_DOCUMENT_OPEN.
 ERROR_CODES = frozenset([
     "BUSY",
     "BRIDGE_OFF",
     "EXTENSION_NOT_LOADED",
     "ROUTES_DISABLED",
-    "ROUTES_NOT_LOOPBACK",
     "SETUP_INCOMPLETE",
     "IDENTITY_MISMATCH",
     "DOCUMENT_NOT_OPEN",
@@ -244,22 +245,28 @@ def local_addresses(hostname=None):
     return sorted(a for a in found if not is_loopback_host(a) and not _is_unspecified(a))
 
 
+def _connect(addr, port, timeout):
+    """True when a TCP connect to (addr, port) succeeds within ``timeout`` seconds."""
+    family = socket.AF_INET6 if ":" in addr else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(timeout)
+        sock.connect((addr.split("%")[0], port))
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
 def probe_non_loopback(port=ROUTES_PORT, timeout=PROBE_TIMEOUT_SECONDS, addresses=None):
     """Return the first non-loopback local address answering on ``port``, else None."""
     for addr in (local_addresses() if addresses is None else addresses):
-        family = socket.AF_INET6 if ":" in addr else socket.AF_INET
-        sock = socket.socket(family, socket.SOCK_STREAM)
-        try:
-            sock.settimeout(timeout)
-            sock.connect((addr.split("%")[0], port))
+        if _connect(addr, port, timeout):
             return addr
-        except Exception:
-            continue
-        finally:
-            try:
-                sock.close()
-            except Exception:
-                pass
     return None
 
 
