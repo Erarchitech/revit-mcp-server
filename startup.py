@@ -1,11 +1,18 @@
 # -*- coding: UTF-8 -*-
 """
-Revit MCP Extension Startup
-Registers all MCP routes and initializes the API
+Revit MCP Extension Startup (DeGram read-only fork)
+
+Registers only the allowlisted read routes (degram_readonly.ALLOWED_ROUTES) and
+only when the pyRevit Routes host is loopback. Execute-code, save, create,
+modify, delete, transform, tag, color, link, load and export routes are never
+registered, so they do not exist on the wire (phase 1301 D-10, D-23).
 """
 
 from pyrevit import routes
+import importlib
 import logging
+
+import degram_readonly
 
 logger = logging.getLogger(__name__)
 
@@ -14,103 +21,34 @@ api = routes.API("revit_mcp")
 
 
 def register_routes():
-    """Register all MCP route modules"""
+    """Register the allowlisted read routes; register nothing off loopback.
+
+    Returns the list of (method, pattern) pairs that were registered.
+    """
+    host = degram_readonly.configured_routes_host()
+    if not degram_readonly.is_loopback_host(host):
+        logger.error(
+            "revit_mcp routes NOT registered: pyRevit Routes host %r is not "
+            "loopback (set host = 127.0.0.1 in the [routes] section of "
+            "pyRevit_config.ini and restart Revit)", host)
+        return []
+
+    guard = degram_readonly.ReadOnlyApi(api)
     try:
-        # Import and register status routes
-        from revit_mcp.status import register_status_routes
-
-        register_status_routes(api)
-
-        from revit_mcp.model_info import register_model_info_routes
-
-        register_model_info_routes(api)
-
-        from revit_mcp.views import register_views_routes
-
-        register_views_routes(api)
-
-        from revit_mcp.placement import register_placement_routes
-
-        register_placement_routes(api)
-
-        from revit_mcp.colors import register_color_routes
-
-        register_color_routes(api)
-
-        from revit_mcp.code_execution import register_code_execution_routes
-
-        register_code_execution_routes(api)
-
-        from revit_mcp.building import register_building_routes
-
-        register_building_routes(api)
-
-        from revit_mcp.editing import register_editing_routes
-
-        register_editing_routes(api)
-
-        from revit_mcp.structure import register_structure_routes
-
-        register_structure_routes(api)
-
-        from revit_mcp.annotation import register_annotation_routes
-
-        register_annotation_routes(api)
-
-        from revit_mcp.analysis import register_analysis_routes
-
-        register_analysis_routes(api)
-
-        from revit_mcp.documentation import register_documentation_routes
-
-        register_documentation_routes(api)
-
-        from revit_mcp.rooms import register_room_routes
-
-        register_room_routes(api)
-
-        from revit_mcp.view_management import register_view_management_routes
-
-        register_view_management_routes(api)
-
-        from revit_mcp.tags import register_tag_routes
-
-        register_tag_routes(api)
-
-        from revit_mcp.transforms import register_transform_routes
-
-        register_transform_routes(api)
-
-        from revit_mcp.mep import register_mep_routes
-
-        register_mep_routes(api)
-
-        from revit_mcp.parameters import register_parameter_routes
-
-        register_parameter_routes(api)
-
-        from revit_mcp.interop import register_interop_routes
-
-        register_interop_routes(api)
-
-        from revit_mcp.detail import register_detail_routes
-
-        register_detail_routes(api)
-
-        from revit_mcp.clash import register_clash_routes
-
-        register_clash_routes(api)
-
-        from revit_mcp.document import register_document_routes
-
-        register_document_routes(api)
-
-        logger.info("All MCP routes registered successfully")
-
+        for module_name, function_name in degram_readonly.ALLOWED_ROUTE_MODULES:
+            module = importlib.import_module("revit_mcp." + module_name)
+            getattr(module, function_name)(guard)
     except Exception as e:
         logger.error("Failed to register MCP routes: %s", str(e))
         raise
 
+    missing = degram_readonly.ALLOWED_ROUTES - set(guard.registered)
+    if missing:
+        logger.warning("Allowlisted routes not registered: %s", sorted(missing))
+    logger.info("Registered %d read routes; dropped %d non-allowlisted route declarations",
+                len(guard.registered), len(guard.dropped))
+    return list(guard.registered)
 
-# Register all routes when the extension loads
+
+# Register the read routes when the extension loads
 register_routes()

@@ -13,7 +13,7 @@ def register_status_routes(api):
     """Register all status-related routes with the API"""
     
     @api.route('/status/', methods=["GET"])
-    def revit_status():
+    def revit_status(doc):
         """
         Health check endpoint that verifies Revit context availability
         
@@ -21,9 +21,8 @@ def register_status_routes(api):
             dict: Health status with Revit document information
         """
         try:
-            from pyrevit import revit
-            
-            doc = revit.doc
+            # doc is injected by pyRevit, which also makes it run this handler on the
+            # Revit API thread via ExternalEvent (declaring doc/uiapp is the trigger).
             if doc:
                 return routes.make_response(data={
                     "status": "active",

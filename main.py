@@ -16,15 +16,22 @@ Environment:
     REVIT_PORT  pyRevit Routes port                   (default: 48884)
     MCP_HOST    bind address for --http/--sse modes   (default: 127.0.0.1)
     MCP_PORT    port for --http/--sse modes           (default: 8000)
+    DEGRAM_MODE 1 = launched by DeGram: stdio only, --http/--sse/--combined
+                are refused (phase 1301 D-11)
+
+This fork is read-only: only the tools in degram_readonly.ALLOWED_TOOLS exist.
 """
 
 import argparse
 import base64
 import os
+import sys
 from typing import Any, Dict, Optional, Union
 
 import httpx
 from mcp.server.fastmcp import FastMCP, Image
+
+import degram_readonly
 
 REVIT_HOST = os.environ.get("REVIT_HOST", "localhost")
 REVIT_PORT = int(os.environ.get("REVIT_PORT", "48884"))
@@ -166,6 +173,11 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 if __name__ == "__main__":
     transport = parse_args().transport
+    try:
+        degram_readonly.enforce_transport(transport)
+    except degram_readonly.DegramModeError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)
     if transport == "combined":
         import anyio
 
