@@ -180,23 +180,6 @@ class ReadOnlyToolRegistry(object):
         return decorator
 
 
-def structured_helper(helper):
-    """Wrap a client helper so error outcomes reach the tool layer as JSON text.
-
-    ``format_response`` passes strings through unchanged, so a structured
-    outcome (``status == "error"`` plus a ``code``) is serialized once, here,
-    instead of being reworded into an ``Error:`` paragraph.
-    """
-
-    async def wrapper(*args, **kwargs):
-        result = await helper(*args, **kwargs)
-        if is_outcome(result):
-            return json.dumps(result, ensure_ascii=False)
-        return result
-
-    return wrapper
-
-
 def is_outcome(value):
     return (isinstance(value, dict) and value.get("status") == "error"
             and isinstance(value.get("code"), str))

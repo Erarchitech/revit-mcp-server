@@ -23,7 +23,7 @@ import logging
 
 from pyrevit import routes, DB
 
-from utils import get_element_id_value
+from .utils import get_element_id_value, parse_request_data
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +70,7 @@ def _error(code, message, status, **extra):
 
 
 def _read_body(request):
-    data = getattr(request, "data", None)
-    if isinstance(data, str):
-        try:
-            data = json.loads(data)
-        except ValueError:
-            return None
-    return data if isinstance(data, dict) else None
+    return parse_request_data(getattr(request, "data", None))
 
 
 def _open_documents(uiapp):

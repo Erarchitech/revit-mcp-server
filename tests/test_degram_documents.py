@@ -290,6 +290,14 @@ def test_snapshot_accepts_a_json_string_body(documents):
     assert documents.snapshot(app, uidoc, SimpleNamespace(data=raw)).status == 200
 
 
+def test_snapshot_accepts_a_text_plain_bytes_body(documents):
+    # Under IronPython 3.4 a text/plain body reaches the route unparsed, as bytes (G-12).
+    a, b = two_docs()
+    app, uidoc = make_uiapp([a, b], 0, selected=[101])
+    raw = json.dumps({"identity": tower_identity()}).encode("utf-8")
+    assert documents.snapshot(app, uidoc, SimpleNamespace(data=raw)).status == 200
+
+
 def test_snapshot_never_reads_when_no_document_is_active(documents):
     a, _ = two_docs()
     app = SimpleNamespace(Application=SimpleNamespace(Documents=[a]), ActiveUIDocument=None)
@@ -403,8 +411,10 @@ def test_tool_returns_structured_json_not_error_text(no_machine_config):
     def boom(request):
         raise httpx.ConnectError("refused", request=request)
 
+    from tools import structured_helper
+
     client = client_with(boom)
-    helper = dro.structured_helper(client.get)
+    helper = structured_helper(client.get)
     text = run(helper("/status/"))
     assert json.loads(text)["code"] == "BRIDGE_OFF"
     assert not text.startswith("Error:")
@@ -417,6 +427,7 @@ def test_get_selection_snapshot_tool_posts_identity_and_limits(no_machine_config
 
     def handler(request):
         seen["path"] = request.url.path
+        seen["type"] = request.headers.get("content-type")
         seen["body"] = json.loads(request.content)
         return httpx.Response(200, json={"status": "ok", "elements": []})
 
@@ -433,6 +444,8 @@ def test_get_selection_snapshot_tool_posts_identity_and_limits(no_machine_config
     text = result[0][0].text if isinstance(result, tuple) else result[0].text
     assert json.loads(text)["status"] == "ok"
     assert seen["path"].endswith("/selection_snapshot/")
+    # Not application/json: pyRevit's own JSON parse fails under IronPython 3.4 (G-12).
+    assert seen["type"].startswith("text/plain")
     assert seen["body"] == {"identity": {"creationGuid": "g", "pathName": "p"},
                             "max_elements": 5, "max_parameters": 50}
 

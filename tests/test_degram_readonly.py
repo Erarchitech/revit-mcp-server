@@ -11,6 +11,7 @@ Both layers are covered:
 ``install_pyrevit_stubs`` is reused by ``test_degram_documents.py``.
 """
 
+import ast
 import asyncio
 import importlib
 import inspect
@@ -169,6 +170,47 @@ def test_allowlists_are_exactly_the_expected_sets():
 
 def test_every_allowed_tool_is_a_read_verb():
     assert all(re.match(r"^(get|list)_", name) for name in dro.ALLOWED_TOOLS)
+
+
+# Syntax newer than Python 3.4: pyRevit runs startup.py on IronPython 3.4, which
+# cannot parse it, so the whole extension fails to load (1301 UAT G-9).
+_NOT_IRONPYTHON = (ast.AsyncFunctionDef, ast.AsyncFor, ast.AsyncWith, ast.Await,
+                   ast.JoinedStr, ast.AnnAssign, ast.NamedExpr)
+
+
+@pytest.mark.parametrize("relpath", ["startup.py", "degram_readonly.py"] + sorted(
+    os.path.join("revit_mcp", name)
+    for name in os.listdir(os.path.join(ROOT, "revit_mcp")) if name.endswith(".py")))
+def test_pyrevit_side_modules_parse_under_ironpython(relpath):
+    with open(os.path.join(ROOT, relpath), encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, _NOT_IRONPYTHON):
+            found.append((type(node).__name__, node.lineno))
+        elif isinstance(node, (ast.FunctionDef, ast.Lambda)):
+            args = node.args
+            annotated = [a for a in args.args + args.kwonlyargs if a.annotation is not None]
+            if annotated or getattr(node, "returns", None) is not None:
+                found.append(("annotation", node.lineno))
+    assert found == []
+
+
+_SIBLINGS = {name[:-3] for name in os.listdir(os.path.join(ROOT, "revit_mcp")) if name.endswith(".py")}
+
+
+@pytest.mark.parametrize("name", sorted(_SIBLINGS))
+def test_route_modules_import_siblings_explicitly(name):
+    # ``from utils import`` inside the package is an implicit relative import:
+    # IronPython 2.7 resolves it, IronPython 3.4 does not (1301 UAT G-10).
+    with open(os.path.join(ROOT, "revit_mcp", name + ".py"), encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    implicit = [node.lineno for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.level == 0
+                and (node.module or "").split(".")[0] in _SIBLINGS]
+    implicit += [node.lineno for node in ast.walk(tree) if isinstance(node, ast.Import)
+                 for alias in node.names if alias.name.split(".")[0] in _SIBLINGS]
+    assert implicit == []
 
 
 # --- route layer ----------------------------------------------------------------

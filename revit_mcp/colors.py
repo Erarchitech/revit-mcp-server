@@ -4,13 +4,13 @@ Color management functionality for Revit elements
 Provides tools for color splashing elements based on parameter values
 """
 
-from utils import get_element_id_value, suppress_warnings
+from .utils import get_element_id_value, suppress_warnings
 from pyrevit import routes, DB
 import json
 import logging
 import random
 from collections import defaultdict
-from .utils import normalize_string
+from .utils import normalize_string, parse_request_data
 
 logger = logging.getLogger(__name__)
 
@@ -1174,11 +1174,7 @@ def register_color_routes(api):
         }
         """
         try:
-            data = (
-                json.loads(request.data)
-                if isinstance(request.data, str)
-                else request.data
-            )
+            data = parse_request_data(request.data) or {}
 
             category_name = data.get("category_name")
 

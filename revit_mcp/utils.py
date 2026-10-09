@@ -1,9 +1,32 @@
 # -*- coding: utf-8 -*-
 from pyrevit import DB
+import json
 import traceback
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def parse_request_data(data):
+    """Return a request body as a dict, or None when it is not a JSON object.
+
+    pyRevit parses the body itself only for ``Content-Type: application/json``,
+    and that parse raises TypeError under IronPython 3.4 before the route runs.
+    The DeGram client therefore sends ``text/plain`` and the body arrives here
+    unparsed, as bytes (1301 UAT G-12); str and an already parsed dict are
+    accepted too.
+    """
+    if isinstance(data, (bytes, bytearray)):
+        try:
+            data = bytes(data).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except ValueError:
+            return None
+    return data if isinstance(data, dict) else None
 
 
 class _FailureSwallower(DB.IFailuresPreprocessor):

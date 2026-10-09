@@ -9,6 +9,7 @@ disk but are never imported. Registration additionally goes through
 ``degram_readonly.ALLOWED_TOOLS`` (phase 1301 D-10).
 """
 
+import json
 from importlib import import_module
 
 import degram_readonly
@@ -25,12 +26,31 @@ _MODULES = (
 )
 
 
+def structured_helper(helper):
+    """Wrap a client helper so error outcomes reach the tool layer as JSON text.
+
+    ``format_response`` passes strings through unchanged, so a structured
+    outcome (``status == "error"`` plus a ``code``) is serialized once, here,
+    instead of being reworded into an ``Error:`` paragraph. It lives here and
+    not in ``degram_readonly`` because that module is also loaded by the
+    IronPython ``startup.py``, which cannot parse ``async def``.
+    """
+
+    async def wrapper(*args, **kwargs):
+        result = await helper(*args, **kwargs)
+        if degram_readonly.is_outcome(result):
+            return json.dumps(result, ensure_ascii=False)
+        return result
+
+    return wrapper
+
+
 def register_tools(mcp_server, revit_get, revit_post, revit_image):
     """Register the allowlisted tools with ``mcp_server``."""
     guarded = degram_readonly.ReadOnlyToolRegistry(mcp_server)
     helpers = {
-        "get": degram_readonly.structured_helper(revit_get),
-        "post": degram_readonly.structured_helper(revit_post),
+        "get": structured_helper(revit_get),
+        "post": structured_helper(revit_post),
         "image": revit_image,
     }
     for module_name, func_name, needs in _MODULES:

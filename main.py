@@ -44,6 +44,19 @@ API_ROOT = "http://{}:{}/revit_mcp".format(REVIT_HOST, REVIT_PORT)
 DEFAULT_TIMEOUT = 30.0
 IMAGE_TIMEOUT = 60.0
 
+
+def json_body(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Request kwargs for a JSON POST body that pyRevit Routes passes through.
+
+    pyRevit parses ``application/json`` bodies itself and that parse fails under
+    IronPython 3.4 before the route runs, so the body goes as ``text/plain`` and
+    the route parses it (``revit_mcp.utils.parse_request_data``; 1301 UAT G-12).
+    """
+    return {
+        "content": json.dumps(data or {}, ensure_ascii=False).encode("utf-8"),
+        "headers": {"Content-Type": "text/plain; charset=utf-8"},
+    }
+
 UNREACHABLE_HINT = (
     "Error: cannot reach Revit at {root}.\n"
     "Check that:\n"
@@ -118,7 +131,7 @@ class RevitClient(object):
     async def post(self, path: str, data: Optional[Payload] = None, ctx=None,
                    timeout: float = DEFAULT_TIMEOUT) -> Result:
         """POST a JSON body to a route and return its decoded JSON (or an error string)."""
-        return self._decode(path, await self._send("POST", path, timeout, json=data or {}))
+        return self._decode(path, await self._send("POST", path, timeout, **json_body(data)))
 
     async def image(self, path: str, ctx=None) -> Union[Image, str]:
         """GET a route that returns ``{"image_data": <base64 png>}`` as an MCP image."""
@@ -234,7 +247,7 @@ class DegramClient(RevitClient):
 
     async def post(self, path: str, data: Optional[Payload] = None, ctx=None,
                    timeout: float = DEFAULT_TIMEOUT):
-        return await self._call("POST", path, timeout, json=data or {})
+        return await self._call("POST", path, timeout, **json_body(data))
 
     async def image(self, path: str, ctx=None):
         return json.dumps(degram_readonly.error_outcome(

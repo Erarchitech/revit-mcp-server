@@ -4,16 +4,19 @@ Views Module for Revit MCP
 Handles view export and image generation functionality
 """
 
-from utils import get_element_id_value
+from .utils import get_element_id_value
 from pyrevit import routes, revit, DB
 import tempfile
 import os
 import base64
 import logging
-from urllib import unquote
+try:
+    from urllib.parse import unquote  # IronPython 3.4
+except ImportError:
+    from urllib import unquote  # IronPython 2.7
 from System.Collections.Generic import List
 
-from utils import normalize_string, get_element_name
+from .utils import normalize_string, get_element_name
 
 logger = logging.getLogger(__name__)
 

@@ -6,8 +6,8 @@
     "website": "https://github.com/Demolinator/revit-mcp-server",
     "author": "Talal Ahmed, based on work by Juan D. Rodriguez and Jean-Marc Couffin",
     "author_profile": "https://github.com/Demolinator",
-    "builtin": "True",
-    "default_enabled": "False",
+    "builtin": "False",
+    "default_enabled": "True",
     "rocket_mode_compatible": "True",
     "image": "",
     "dependencies": []
